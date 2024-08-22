@@ -17,6 +17,7 @@ export default class Changes {
         }
         const root = selector[0] === "/"
         if ( root ) selector = selector.slice( 1 )
+        selector = selector.replace( /\//g, "[/\\\\]" )
         selector = selector.replace( /[\.^$]/g, "\\$&" )
         selector = selector.replace( /\*+/g, m => m.length > 1 ? "[^]*" : "[^/]*" )
         selector = root ? `^${selector}$` : `${selector}$`
@@ -24,7 +25,6 @@ export default class Changes {
     }
     /** @param {string} filepath @param {RegExp} selector  */
     static match( filepath, selector ) {
-        filepath = filepath.replace( /\\/g, "/" )
         return selector.test( filepath )
     }
 
@@ -62,13 +62,9 @@ export default class Changes {
         this.cache = {}
     }
 
-    async apply() {
-        const files = ( await scandir( this.directory, [".changes", ".git"] ) ).filter( file => file.dirent.isFile() )
-        const stats = await Promise.all( files.map( file => stat( file.path ) ) )
-        const changes = files
-            .map( file => path.relative( this.directory, file.path ) )
-            .filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
-
+    /** @param {string[]} filepaths relative file paths */
+    dispatchChanges( filepaths ) {
+        const changes = filepaths
         for ( const listener of this.listeners ) {
             for ( const filepath of changes ) {
                 if ( Changes.match( filepath, listener.selector ) ) {
@@ -76,10 +72,36 @@ export default class Changes {
                 }
             }
         }
+    }
+
+    async apply() {
+        const files = ( await scandir( this.directory, [".changes", ".git"] ) ).filter( file => file.dirent.isFile() )
+        const stats = await Promise.all( files.map( file => stat( file.path ) ) )
+        const changes = files
+            .map( file => path.relative( this.directory, file.path ) )
+            .filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
+
+        this.dispatchChanges( changes )
 
         this.cache = Object.fromEntries( files.map( ( file, i ) =>
             [path.relative( this.directory, file.path ), stats[i].mtimeMs]
         ) )
         this.saveCache()
     }
+
+    /** @param {string[]} candidates relative file paths */
+    async applyPartial( candidates ) {
+        const filter = new RegExp( Changes.compileSelector( [".changes", ".changes/**", ".git", ".git/**"] ) )
+        const files = candidates.filter( file => !Changes.match( file, filter ) && fs.existsSync( path.join( this.directory, file ) ) )
+        if ( files.length === 0 ) return
+
+        this.dispatchChanges( files )
+
+        const stats = await Promise.all( files.map( file => stat( path.join( this.directory, file ) ) ) )
+        this.cache = Object.assign( this.cache, Object.fromEntries( files.map( ( file, i ) =>
+            [file, stats[i].mtimeMs]
+        ) ) )
+        this.saveCache()
+    }
+
 }
