@@ -5,14 +5,27 @@ import path from 'path'
 import { scandir, stat } from './bin/util.js'
 
 /**
- * @typedef {(...args: any) => void} ChangesCallback 
+ * @typedef {(filepath: string) => void} ChangesCallback 
+ * @typedef {string|string[]} ChangesSelector
  */
 
 export default class Changes {
-    /** @param {string} filepath @param {string} selector  */
+    /** @param {ChangesSelector} selector @returns {string} */
+    static compileSelector( selector ) {
+        if ( selector instanceof Array ) {
+            return selector.map( Changes.compileSelector ).join( "|" )
+        }
+        const root = selector[0] === "/"
+        if ( root ) selector = selector.slice( 1 )
+        selector = selector.replace( /[\.^$]/g, "\\$&" )
+        selector = selector.replace( /\*+/g, m => m.length > 1 ? "[^]*" : "[^/]*" )
+        selector = root ? `^${selector}$` : `${selector}$`
+        return selector
+    }
+    /** @param {string} filepath @param {RegExp} selector  */
     static match( filepath, selector ) {
-        filepath = filepath.replace( /\\/g, '/' )
-        return filepath.startsWith( selector )
+        filepath = filepath.replace( /\\/g, "/" )
+        return selector.test( filepath )
     }
 
     /** @param {string} directory absolute path of directory */
@@ -21,16 +34,17 @@ export default class Changes {
 
         /** @type {{[path:string]: number}} */
         this.cache = {}
-        this.cacheDirectory = path.join( directory, '.changes' )
+        this.cacheDirectory = path.join( directory, ".changes" )
         this.loadCache()
 
-        /** @type {{selector: string, callback: ChangesCallback}[]} */
+        /** @type {{selector: RegExp, callback: ChangesCallback}[]} */
         this.listeners = []
     }
 
-    /** @param {string} selector @param {ChangesCallback} callback  */
+    /** @param {ChangesSelector} selector @param {ChangesCallback} callback  */
     addChangeListener( selector, callback ) {
-        this.listeners.push( { selector, callback } )
+        const regex = new RegExp( Changes.compileSelector( selector ) )
+        this.listeners.push( { selector: regex, callback } )
     }
 
     loadCache() {
@@ -49,11 +63,11 @@ export default class Changes {
     }
 
     async apply() {
-        const files = ( await scandir( this.directory ) ).filter( file => file.dirent.isFile() )
+        const files = ( await scandir( this.directory, [".changes", ".git"] ) ).filter( file => file.dirent.isFile() )
         const stats = await Promise.all( files.map( file => stat( file.path ) ) )
         const changes = files
             .map( file => path.relative( this.directory, file.path ) )
-            .filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path.relative] )
+            .filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
 
         for ( const listener of this.listeners ) {
             for ( const filepath of changes ) {

@@ -8,32 +8,23 @@ import path from 'path'
  * @typedef {"file"|"directory"|"blockDevice"|"characterDevice"|"symbolicLink"|"FIFO"|"socket"} FileFilterDescriptor
  */
 
-const FileFilterDescriptorMap = Object.freeze( {
-    "file": "isFile",
-    "directory": "isDirectory",
-    "blockDevice": "isBlockDevice",
-    "characterDevice": "isCharacterDevice",
-    "symbolicLink": "isSymbolicLink",
-    "FIFO": "isFIFO",
-    "socket": "isSocket",
-} )
-
 /** @param {string} directory */
 export function mkdir( directory ) {
     return fs.mkdir( directory, { recursive: true } )
 }
-/** @param {string} directory @returns {Promise<Dirent[]>} */
-export async function readdir( directory ) {
-    const elements = ( await fs.readdir( directory, { withFileTypes: true } ) )
-        .map( dirent => ( { dirent, path: path.join( directory, dirent.name ) } ) )
+/** @param {string} directory @param {string[]} [ignore] @returns {Promise<Dirent[]>} */
+export async function readdir( directory, ignore ) {
+    let elements = ( await fs.readdir( directory, { withFileTypes: true } ) )
+    elements = elements.map( dirent => ( { dirent, path: path.join( directory, dirent.name ) } ) )
+    if ( ignore ) elements = elements.filter( ( { path } ) => !ignore.some( s => path.endsWith( s ) ) )
     return elements
 }
 
-/** @param {string} directory @returns {Promise<Dirent[]>} */
-export async function scandir( directory ) {
+/** @param {string} directory @param {string[]} [ignore] @returns {Promise<Dirent[]>} */
+export async function scandir( directory, ignore ) {
     const results = []
     async function inner( directory ) {
-        const elements = await readdir( directory )
+        const elements = await readdir( directory, ignore )
         for ( const element of elements ) {
             if ( element.dirent.isDirectory() ) {
                 await inner( element.path )
