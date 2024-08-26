@@ -73,14 +73,16 @@ export default class Changes {
     /** @param {string[]} candidates relative file paths */
     async applyPartial( candidates ) {
         const filter = Selector( [".changes", ".changes/**", ".git", ".git/**"] )
-        const files = candidates.filter( file => !Changes.match( file, filter ) && fs.existsSync( path.join( this.directory, file ) ) )
+        const files = candidates.filter( file => !filter.test( file ) )
+            .map( file => path.join( this.directory, file ) )
+            .filter( file => fs.existsSync( file ) && fs.statSync( file ).isFile() )
         if ( files.length === 0 ) return
 
         this.dispatchChanges( files )
 
-        const stats = await Promise.all( files.map( file => stat( path.join( this.directory, file ) ) ) )
+        const stats = await Promise.all( files.map( file => stat( file ) ) )
         this.cache = Object.assign( this.cache, Object.fromEntries( files.map( ( file, i ) =>
-            [file, stats[i].mtimeMs]
+            [path.relative( this.directory, file ), stats[i].mtimeMs]
         ) ) )
         this.saveCache()
     }
