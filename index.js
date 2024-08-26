@@ -3,31 +3,13 @@ import fs from 'fs'
 import crypto from 'crypto'
 import path from 'path'
 import { scandir, stat } from './bin/util.js'
+import { Selector } from './bin/selector.js'
 
 /**
  * @typedef {(filepath: string) => void} ChangesCallback 
- * @typedef {string|string[]} ChangesSelector
  */
 
 export default class Changes {
-    /** @param {ChangesSelector} selector @returns {string} */
-    static compileSelector( selector ) {
-        if ( selector instanceof Array ) {
-            return selector.map( Changes.compileSelector ).join( "|" )
-        }
-        const root = selector[0] === "/"
-        if ( root ) selector = selector.slice( 1 )
-        selector = selector.replace( /\//g, "[/\\\\]" )
-        selector = selector.replace( /[\.^$]/g, "\\$&" )
-        selector = selector.replace( /\*+/g, m => m.length > 1 ? "[^]*" : "[^/]*" )
-        selector = root ? `^${selector}$` : `${selector}$`
-        return selector
-    }
-    /** @param {string} filepath @param {RegExp} selector  */
-    static match( filepath, selector ) {
-        return selector.test( filepath )
-    }
-
     /** @param {string} directory absolute path of directory */
     constructor( directory ) {
         this.directory = directory
@@ -41,10 +23,9 @@ export default class Changes {
         this.listeners = []
     }
 
-    /** @param {ChangesSelector} selector @param {ChangesCallback} callback  */
+    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
     addChangeListener( selector, callback ) {
-        const regex = new RegExp( Changes.compileSelector( selector ) )
-        this.listeners.push( { selector: regex, callback } )
+        this.listeners.push( { selector: Selector( selector ), callback } )
     }
 
     loadCache() {
@@ -67,7 +48,7 @@ export default class Changes {
         const changes = filepaths
         for ( const listener of this.listeners ) {
             for ( const filepath of changes ) {
-                if ( Changes.match( filepath, listener.selector ) ) {
+                if ( listener.selector.test( filepath ) ) {
                     listener.callback( filepath )
                 }
             }
@@ -77,21 +58,21 @@ export default class Changes {
     async apply() {
         const files = ( await scandir( this.directory, [".changes", ".git"] ) ).filter( file => file.dirent.isFile() )
         const stats = await Promise.all( files.map( file => stat( file.path ) ) )
-        const changes = files
-            .map( file => path.relative( this.directory, file.path ) )
-            .filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
+        const relative = files.map( file => path.relative( this.directory, file.path ) )
+        const changes = relative.filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
 
         this.dispatchChanges( changes )
 
+        const newstats = await Promise.all( files.map( file => stat( file.path ) ) )
         this.cache = Object.fromEntries( files.map( ( file, i ) =>
-            [path.relative( this.directory, file.path ), stats[i].mtimeMs]
+            [path.relative( this.directory, file.path ), newstats[i].mtimeMs]
         ) )
         this.saveCache()
     }
 
     /** @param {string[]} candidates relative file paths */
     async applyPartial( candidates ) {
-        const filter = new RegExp( Changes.compileSelector( [".changes", ".changes/**", ".git", ".git/**"] ) )
+        const filter = Selector( [".changes", ".changes/**", ".git", ".git/**"] )
         const files = candidates.filter( file => !Changes.match( file, filter ) && fs.existsSync( path.join( this.directory, file ) ) )
         if ( files.length === 0 ) return
 
