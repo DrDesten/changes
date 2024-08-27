@@ -10,9 +10,16 @@ import { Selector } from './bin/selector.js'
  */
 
 export default class Changes {
+    static DefaultOptions = {
+        selector: ["!**.git**"]
+    }
+
     /** @param {string} directory absolute path of directory */
-    constructor( directory ) {
+    constructor( directory, options = {} ) {
         this.directory = directory
+        this.options = Object.assign( {}, Changes.DefaultOptions, options )
+        this.selector = Selector( [...this.options.selector, "!**.changes**"] )
+        console.log( this.selector )
 
         /** @type {{[path:string]: number}} */
         this.cache = {}
@@ -43,49 +50,63 @@ export default class Changes {
         this.cache = {}
     }
 
-    /** @param {string[]} filepaths relative file paths */
-    dispatchChanges( filepaths ) {
-        const changes = filepaths
+    /** @param {{path: string, relative: string}[]} files file paths */
+    dispatchChanges( files ) {
         for ( const listener of this.listeners ) {
-            for ( const filepath of changes ) {
-                if ( listener.selector.test( filepath ) ) {
-                    listener.callback( filepath )
+            for ( const { relative } of files ) {
+                if ( listener.selector.test( relative ) ) {
+                    listener.callback( relative )
                 }
             }
         }
     }
 
-    async apply() {
-        const files = ( await scandir( this.directory, [".changes", ".git"] ) ).filter( file => file.dirent.isFile() )
+    async getChanged() {
+        const elements = await scandir( this.directory, this.selector )
+        const files = elements.filter( file => file.dirent.isFile() )
         const stats = await Promise.all( files.map( file => stat( file.path ) ) )
-        const relative = files.map( file => path.relative( this.directory, file.path ) )
-        const changes = relative.filter( ( path, i ) => stats[i].mtimeMs !== this.cache[path] )
+        const mapped = files.map( file => ( {
+            path: file.path,
+            relative: path.relative( this.directory, file.path )
+        } ) )
+        const changes = mapped.filter( ( file, i ) => stats[i].mtimeMs !== this.cache[file.relative] )
+        return { all: mapped, changed: changes }
+    }
 
-        this.dispatchChanges( changes )
-
-        const newstats = await Promise.all( files.map( file => stat( file.path ) ) )
-        this.cache = Object.fromEntries( files.map( ( file, i ) =>
-            [path.relative( this.directory, file.path ), newstats[i].mtimeMs]
-        ) )
+    /** @param {{path: string, relative: string}[]} files file paths */
+    async updateCache( files ) {
+        const updated = Object.fromEntries( await Promise.all( files.map(
+            async file => [file.relative, ( await stat( file.path ) ).mtime]
+        ) ) )
+        this.cache = updated
+        this.saveCache()
+    }
+    /** @param {{path: string, relative: string}[]} files file paths */
+    async updateCachePartial( files ) {
+        const updated = Object.fromEntries( await Promise.all( files.map(
+            async file => [file.relative, ( await stat( file.path ) ).mtime]
+        ) ) )
+        Object.assign( this.cache, updated )
         this.saveCache()
     }
 
-    /** @param {string[]} candidates relative file paths */
+    /** Check for changes and run listeners */
+    async apply() {
+        const { all, changed } = await this.getChanged()
+        this.dispatchChanges( changed )
+        await this.updateCache( all )
+    }
+
+    /** Run listeners for provided files @param {string[]} candidates relative file paths */
     async applyPartial( candidates ) {
-        const filter = Selector( [".changes", ".changes/**", ".git", ".git/**"] )
-        const files = candidates.filter( file => !filter.test( file ) )
+        const files = candidates.filter( file => this.selector.test( file ) )
             .map( file => ( { path: path.join( this.directory, file ), relative: file } ) )
             .filter( file => fs.existsSync( file.path ) && fs.statSync( file.path ).isFile() )
         if ( files.length === 0 ) return
-        const relative = files.map( ( { relative } ) => relative )
 
-        this.dispatchChanges( relative )
+        this.dispatchChanges( files )
 
-        const stats = await Promise.all( files.map( file => stat( file.path ) ) )
-        this.cache = Object.assign( this.cache, Object.fromEntries( files.map( ( file, i ) =>
-            [file.relative, stats[i].mtimeMs]
-        ) ) )
-        this.saveCache()
+        await this.updateCachePartial( files )
     }
 
 }

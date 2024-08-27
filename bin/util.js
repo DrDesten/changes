@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { Selector } from './selector.js'
 
 /**
  * @typedef {import('fs').Dirent} fsDirent
@@ -12,19 +13,23 @@ import path from 'path'
 export function mkdir( directory ) {
     return fs.mkdir( directory, { recursive: true } )
 }
-/** @param {string} directory @param {string[]} [ignore] @returns {Promise<Dirent[]>} */
-export async function readdir( directory, ignore ) {
-    let elements = ( await fs.readdir( directory, { withFileTypes: true } ) )
+/** @param {string} directory @param {string|string[]|RegExp} [selector] @returns {Promise<Dirent[]>} */
+export async function readdir( directory, selector ) {
+    let elements = await fs.readdir( directory, { withFileTypes: true } )
     elements = elements.map( dirent => ( { dirent, path: path.join( directory, dirent.name ) } ) )
-    if ( ignore ) elements = elements.filter( ( { path } ) => !ignore.some( s => path.endsWith( s ) ) )
+    if ( selector ) {
+        selector = Selector( selector )
+        elements = elements.filter( e => selector.test( e.path ) )
+    }
     return elements
 }
 
-/** @param {string} directory @param {string[]} [ignore] @returns {Promise<Dirent[]>} */
-export async function scandir( directory, ignore ) {
+/** @param {string} directory @param {string|string[]|RegExp} [selector] @returns {Promise<Dirent[]>} */
+export async function scandir( directory, selector ) {
+    selector = Selector( selector )
     const results = []
     async function inner( directory ) {
-        const elements = await readdir( directory, ignore )
+        const elements = await readdir( directory, selector )
         for ( const element of elements ) {
             if ( element.dirent.isDirectory() ) {
                 await inner( element.path )
