@@ -19,7 +19,6 @@ export default class Changes {
         this.directory = directory
         this.options = Object.assign( {}, Changes.DefaultOptions, options )
         this.selector = Selector( [...this.options.selector, "!**.changes**"] )
-        console.log( this.selector )
 
         /** @type {{[path:string]: number}} */
         this.cache = {}
@@ -76,7 +75,7 @@ export default class Changes {
     /** @param {{path: string, relative: string}[]} files file paths */
     async updateCache( files ) {
         const updated = Object.fromEntries( await Promise.all( files.map(
-            async file => [file.relative, ( await stat( file.path ) ).mtime]
+            async file => [file.relative, ( await stat( file.path ) ).mtimeMs]
         ) ) )
         this.cache = updated
         this.saveCache()
@@ -84,7 +83,7 @@ export default class Changes {
     /** @param {{path: string, relative: string}[]} files file paths */
     async updateCachePartial( files ) {
         const updated = Object.fromEntries( await Promise.all( files.map(
-            async file => [file.relative, ( await stat( file.path ) ).mtime]
+            async file => [file.relative, ( await stat( file.path ) ).mtimeMs]
         ) ) )
         Object.assign( this.cache, updated )
         this.saveCache()
