@@ -98,9 +98,8 @@ export default class Changes {
 
     /** Run listeners for provided files @param {string[]} candidates relative file paths */
     async applyPartial( candidates ) {
-        const files = candidates.filter( file => this.selector.test( file ) )
-            .map( file => ( { path: path.join( this.directory, file ), relative: file } ) )
-            .filter( file => fs.existsSync( file.path ) && fs.statSync( file.path ).isFile() )
+        const elements = candidates.filter( file => this.selector.test( file ) ).map( file => ( { path: path.join( this.directory, file ), relative: file } ) )
+        const files = elements.filter( file => fs.existsSync( file.path ) && fs.statSync( file.path ).isFile() )
         if ( files.length === 0 ) return
 
         this.dispatchChanges( files )
