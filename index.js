@@ -5,6 +5,8 @@ import path from 'path'
 import { scandir, stat } from './bin/util.js'
 import { Selector } from './bin/selector.js'
 
+const HASH_KEY = "\\\\hash\\\\"
+
 /**
  * @typedef {(filepath: string) => void} ChangesCallback 
  */
@@ -60,7 +62,8 @@ export default class Changes {
         }
     }
 
-    async getChanged() {
+    /** @param {any} hash */
+    async getChanged( hash ) {
         const elements = await scandir( this.directory, this.selector )
         const files = elements.filter( file => file.dirent.isFile() )
         const stats = await Promise.all( files.map( file => stat( file.path ) ) )
@@ -68,15 +71,17 @@ export default class Changes {
             path: file.path,
             relative: path.relative( this.directory, file.path )
         } ) )
-        const changes = mapped.filter( ( file, i ) => stats[i].mtimeMs !== this.cache[file.relative] )
+        const invalidate = this.cache[HASH_KEY] !== hash
+        const changes = mapped.filter( ( file, i ) => invalidate || stats[i].mtimeMs !== this.cache[file.relative] )
         return { all: mapped, changed: changes }
     }
 
-    /** @param {{path: string, relative: string}[]} files file paths */
-    async updateCache( files ) {
+    /** @param {{path: string, relative: string}[]} files file paths @param {any} hash */
+    async updateCache( files, hash ) {
         const updated = Object.fromEntries( await Promise.all( files.map(
             async file => [file.relative, ( await stat( file.path ) ).mtimeMs]
         ) ) )
+        updated[HASH_KEY] = hash
         this.cache = updated
         this.saveCache()
     }
@@ -89,11 +94,11 @@ export default class Changes {
         this.saveCache()
     }
 
-    /** Check for changes and run listeners */
-    async apply() {
-        const { all, changed } = await this.getChanged()
+    /** Check for changes and run listeners @param {any} hash */
+    async apply( hash ) {
+        const { all, changed } = await this.getChanged( hash )
         this.dispatchChanges( changed )
-        await this.updateCache( all )
+        await this.updateCache( all, hash )
     }
 
     /** Run listeners for provided files @param {string[]} candidates relative file paths */
