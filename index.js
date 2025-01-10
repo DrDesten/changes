@@ -9,6 +9,7 @@ const HASH_KEY = "\\\\hash\\\\"
 
 /**
  * @typedef {(filepath: string) => void} ChangesCallback 
+ * @typedef {() => void} ChangesUnmappedCallback 
  */
 
 export default class Changes {
@@ -35,6 +36,10 @@ export default class Changes {
     addChangeListener( selector, callback ) {
         this.listeners.push( { selector: Selector( selector ), callback } )
     }
+    /** @param {ChangesUnmappedCallback} callback  */
+    addUnconditionalListener( callback ) {
+        this.listeners.push( { selector: null, callback } )
+    }
 
     loadCache() {
         const cachePath = path.join( this.cacheDirectory, "cache.json" )
@@ -54,6 +59,12 @@ export default class Changes {
     /** @param {{path: string, relative: string}[]} files file paths */
     dispatchChanges( files ) {
         for ( const listener of this.listeners ) {
+            // Unconditional listeners
+            if ( listener.selector === null ) {
+                listener.callback()
+                continue
+            }
+            // Conditional listeners
             for ( const { relative } of files ) {
                 if ( listener.selector.test( relative ) ) {
                     listener.callback( relative )
