@@ -8,8 +8,8 @@ import { Selector } from './bin/selector.js'
 const HASH_KEY = "\\\\hash\\\\"
 
 /**
- * @typedef {(filepath: string) => void} ChangesCallback 
- * @typedef {() => void} ChangesUnmappedCallback 
+ * @typedef {(filepath: string) => void|Promise<void>} ChangesCallback 
+ * @typedef {() => void|Promise<void>} ChangesUnmappedCallback 
  */
 
 export default class Changes {
@@ -28,17 +28,33 @@ export default class Changes {
         this.cacheDirectory = path.join( directory, ".changes" )
         this.loadCache()
 
-        /** @type {{selector: RegExp, callback: ChangesCallback}[]} */
-        this.listeners = []
+        this.listeners = {
+            /** @type {{callback: ChangesUnmappedCallback}[]} */
+            always: [],
+            /** @type {{selector: RegExp, callback: ChangesCallback}[]} */
+            create: [],
+            /** @type {{selector: RegExp, callback: ChangesCallback}[]} */
+            change: [],
+            /** @type {{selector: RegExp, callback: ChangesCallback}[]} */
+            delete: [],
+        }
     }
 
-    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
-    addChangeListener( selector, callback ) {
-        this.listeners.push( { selector: Selector( selector ), callback } )
-    }
     /** @param {ChangesUnmappedCallback} callback  */
     addUnconditionalListener( callback ) {
-        this.listeners.push( { selector: null, callback } )
+        this.listeners.always.push( { callback } )
+    }
+    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
+    addCreateListener( selector, callback ) {
+        this.listeners.create.push( { selector: Selector( selector ), callback } )
+    }
+    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
+    addChangeListener( selector, callback ) {
+        this.listeners.change.push( { selector: Selector( selector ), callback } )
+    }
+    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
+    addDeleteListener( selector, callback ) {
+        this.listeners.delete.push( { selector: Selector( selector ), callback } )
     }
 
     loadCache() {
@@ -56,59 +72,99 @@ export default class Changes {
         this.cache = {}
     }
 
-    /** @param {{path: string, relative: string}[]} files file paths */
-    dispatchChanges( files ) {
-        for ( const listener of this.listeners ) {
-            // Unconditional listeners
-            if ( listener.selector === null ) {
-                listener.callback()
-                continue
-            }
-            // Conditional listeners
-            for ( const { relative } of files ) {
-                if ( listener.selector.test( relative ) ) {
-                    listener.callback( relative )
+    /** @param {{path: string, relative: string}[]} changed file paths */
+    async dispatchChanges( changed, created, deleted ) {
+        // Unconditional listeners
+        let promises = []
+        for ( const { callback } of this.listeners.always ) {
+            const res = callback()
+            if (res instanceof Promise) promises.push(res);
+        }
+        await Promise.allSettled(promises)
+
+        // Creation listeners
+        promises = []
+        for ( const { selector, callback } of this.listeners.create ) {
+            for ( const relative of created ) {
+                if ( selector.test( relative ) ) {
+                    const res = callback( relative )
+                    if (res instanceof Promise) promises.push(res);
                 }
             }
         }
+        await Promise.allSettled(promises)
+
+        // Change listeners
+        promises = []
+        for ( const { selector, callback } of this.listeners.change ) {
+            for ( const { relative } of changed ) {
+                if ( selector.test( relative ) ) {
+                    const res = callback( relative )
+                    if (res instanceof Promise) promises.push(res);
+                }
+            }
+        }
+        await Promise.allSettled(promises)
+
+        // Deletion listeners
+        promises = []
+        for ( const { selector, callback } of this.listeners.delete ) {
+            for ( const relative of deleted ) {
+                if ( selector.test( relative ) ) {
+                    const res = callback( relative )
+                    if (res instanceof Promise) promises.push(res);
+                }
+            }
+        }
+        await Promise.allSettled(promises)
     }
 
     /** @param {any} hash */
     async getChanged( hash ) {
+        // get files
         const elements = await scandir( this.directory, this.selector )
         const files = elements.filter( file => file.dirent.isFile() )
-        const stats = await Promise.all( files.map( file => stat( file.path ) ) )
-        const mapped = files.map( file => ( {
+        const mapped = await Promise.all( files.map( async file => ( {
             path: file.path,
-            relative: path.relative( this.directory, file.path )
-        } ) )
+            relative: path.relative( this.directory, file.path ),
+            stat: await stat( file.path ),
+        } ) ))
+
+        // get created/deleted
+        const currentFiles = new Set(mapped.map(file => file.relative));
+        const cachedFiles = new Set(Object.keys(this.cache).filter(key => key != HASH_KEY))
+        const created = [], deleted = []
+        for (const file of currentFiles) if (!cachedFiles.has(file)) created.push(file);
+        for (const file of cachedFiles) if (!currentFiles.has(file)) deleted.push(file);
+
+        // get changed
         const invalidate = this.cache[HASH_KEY] !== hash
-        const changes = mapped.filter( ( file, i ) => invalidate || stats[i].mtimeMs !== this.cache[file.relative] )
-        return { all: mapped, changed: changes }
+        const changes = mapped.filter( file => invalidate || file.stat.mtimeMs !== this.cache[file.relative] )
+        return { all: mapped, changed: changes, created, deleted }
     }
 
-    /** @param {{path: string, relative: string}[]} files file paths @param {any} hash */
+    /** @param {{path: string, relative: string, stat: any}[]} files file paths @param {any} hash */
     async updateCache( files, hash ) {
-        const updated = Object.fromEntries( await Promise.all( files.map(
-            async file => [file.relative, ( await stat( file.path ) ).mtimeMs]
-        ) ) )
+        const updated = Object.fromEntries( files.map(
+            file => [file.relative, file.stat.mtimeMs]
+        ) ) 
         updated[HASH_KEY] = hash
         this.cache = updated
         this.saveCache()
     }
     /** @param {{path: string, relative: string}[]} files file paths */
     async updateCachePartial( files ) {
-        const updated = Object.fromEntries( await Promise.all( files.map(
-            async file => [file.relative, ( await stat( file.path ) ).mtimeMs]
-        ) ) )
+        const updated = Object.fromEntries( files.map(
+            file => [file.relative, file.stat.mtimeMs]
+        ) ) 
         Object.assign( this.cache, updated )
         this.saveCache()
     }
 
     /** Check for changes and run listeners @param {any} hash */
     async apply( hash ) {
-        const { all, changed } = await this.getChanged( hash )
-        this.dispatchChanges( changed )
+        const { all, changed, created, deleted } = await this.getChanged( hash )
+        await this.dispatchChanges( changed, created, deleted  )
         await this.updateCache( all, hash )
     }
 
@@ -118,8 +174,7 @@ export default class Changes {
         const files = elements.filter( file => fs.existsSync( file.path ) && fs.statSync( file.path ).isFile() )
         if ( files.length === 0 ) return
 
-        this.dispatchChanges( files )
-
+        await this.dispatchChanges( files )
         await this.updateCachePartial( files )
     }
 
