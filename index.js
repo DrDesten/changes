@@ -40,23 +40,25 @@ export default class Changes {
         }
     }
 
+    /** @param {'create'|'change'|'delete'|('create'|'change'|'delete')[]} events @param {string} selector @param {ChangesCallback} callback */
+    on( events, selector, callback ) {
+        selector = Selector( selector )
+        if ( typeof events === 'string' ) events = [events]
+        for ( const e of events ) switch ( e ) {
+            case 'create': this.listeners.create.push( { selector, callback } ); break
+            case 'change': this.listeners.change.push( { selector, callback } ); break
+            case 'delete': this.listeners.delete.push( { selector, callback } ); break
+        }
+    }
+
     /** @param {ChangesUnmappedCallback} callback  */
     addUnconditionalListener( callback ) {
         this.listeners.always.push( { callback } )
     }
     /** @param {string|string[]} selector @param {ChangesCallback} callback  */
-    addCreateListener( selector, callback ) {
-        this.listeners.create.push( { selector: Selector( selector ), callback } )
-    }
-    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
     addChangeListener( selector, callback ) {
-        this.listeners.change.push( { selector: Selector( selector ), callback } )
+        this.on( ['create', 'change'], selector, callback )
     }
-    /** @param {string|string[]} selector @param {ChangesCallback} callback  */
-    addDeleteListener( selector, callback ) {
-        this.listeners.delete.push( { selector: Selector( selector ), callback } )
-    }
-
     loadCache() {
         const cachePath = path.join( this.cacheDirectory, "cache.json" )
         if ( fs.existsSync( cachePath ) ) {
@@ -78,9 +80,9 @@ export default class Changes {
         let promises = []
         for ( const { callback } of this.listeners.always ) {
             const res = callback()
-            if (res instanceof Promise) promises.push(res);
+            if ( res instanceof Promise ) promises.push( res )
         }
-        await Promise.allSettled(promises)
+        await Promise.allSettled( promises )
 
         // Creation listeners
         promises = []
@@ -88,11 +90,11 @@ export default class Changes {
             for ( const relative of created ) {
                 if ( selector.test( relative ) ) {
                     const res = callback( relative )
-                    if (res instanceof Promise) promises.push(res);
+                    if ( res instanceof Promise ) promises.push( res )
                 }
             }
         }
-        await Promise.allSettled(promises)
+        await Promise.allSettled( promises )
 
         // Change listeners
         promises = []
@@ -100,11 +102,11 @@ export default class Changes {
             for ( const { relative } of changed ) {
                 if ( selector.test( relative ) ) {
                     const res = callback( relative )
-                    if (res instanceof Promise) promises.push(res);
+                    if ( res instanceof Promise ) promises.push( res )
                 }
             }
         }
-        await Promise.allSettled(promises)
+        await Promise.allSettled( promises )
 
         // Deletion listeners
         promises = []
@@ -112,11 +114,11 @@ export default class Changes {
             for ( const relative of deleted ) {
                 if ( selector.test( relative ) ) {
                     const res = callback( relative )
-                    if (res instanceof Promise) promises.push(res);
+                    if ( res instanceof Promise ) promises.push( res )
                 }
             }
         }
-        await Promise.allSettled(promises)
+        await Promise.allSettled( promises )
     }
 
     /** @param {any} hash */
@@ -128,18 +130,18 @@ export default class Changes {
             path: file.path,
             relative: path.relative( this.directory, file.path ),
             stat: await stat( file.path ),
-        } ) ))
+        } ) ) )
 
         // get created/deleted
-        const currentFiles = new Set(mapped.map(file => file.relative));
-        const cachedFiles = new Set(Object.keys(this.cache).filter(key => key != HASH_KEY))
+        const currentFiles = new Set( mapped.map( file => file.relative ) )
+        const cachedFiles = new Set( Object.keys( this.cache ).filter( key => key != HASH_KEY ) )
         const created = [], deleted = []
-        for (const file of currentFiles) if (!cachedFiles.has(file)) created.push(file);
-        for (const file of cachedFiles) if (!currentFiles.has(file)) deleted.push(file);
+        for ( const file of currentFiles ) if ( !cachedFiles.has( file ) ) created.push( file )
+        for ( const file of cachedFiles ) if ( !currentFiles.has( file ) ) deleted.push( file )
 
         // get changed
         const invalidate = this.cache[HASH_KEY] !== hash
-        const changes = mapped.filter( file => invalidate || file.stat.mtimeMs !== this.cache[file.relative] )
+        const changes = mapped.filter( file => this.cache[file.relative] && ( invalidate || file.stat.mtimeMs !== this.cache[file.relative] ) )
         return { all: mapped, changed: changes, created, deleted }
     }
 
@@ -147,7 +149,7 @@ export default class Changes {
     async updateCache( files, hash ) {
         const updated = Object.fromEntries( files.map(
             file => [file.relative, file.stat.mtimeMs]
-        ) ) 
+        ) )
         updated[HASH_KEY] = hash
         this.cache = updated
         this.saveCache()
@@ -156,7 +158,7 @@ export default class Changes {
     async updateCachePartial( files ) {
         const updated = Object.fromEntries( files.map(
             file => [file.relative, file.stat.mtimeMs]
-        ) ) 
+        ) )
         Object.assign( this.cache, updated )
         this.saveCache()
     }
@@ -164,7 +166,7 @@ export default class Changes {
     /** Check for changes and run listeners @param {any} hash */
     async apply( hash ) {
         const { all, changed, created, deleted } = await this.getChanged( hash )
-        await this.dispatchChanges( changed, created, deleted  )
+        await this.dispatchChanges( changed, created, deleted )
         await this.updateCache( all, hash )
     }
 
